@@ -1,0 +1,7 @@
+*.pdf
+*.txt
+cifar/data/
+imagenet/data/
+cifar/jpeg_data/
+imagenet/jpeg_data/
+best_model
