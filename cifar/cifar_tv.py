@@ -13,21 +13,23 @@ from torchvision.models import resnet18
 
 def main():
 	jpeg = True
+
 	transform_train = transforms.Compose([
 		transforms.RandomCrop(32, padding=4),
 		transforms.RandomHorizontalFlip(),
 		transforms.ToTensor(),
 		transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
 	])
+
 	transform_test = transforms.Compose([
-		transforms.ToTensor(),
-		transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
+    	transforms.ToTensor(),
+    	transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2470, 0.2435, 0.2616)),
 	])
 	train_ds = CIFAR10(root='./torch_data', train=True, download=True, transform=transform_train)
 	test_ds = CIFAR10(root='./torch_data', train=False, download=True, transform=transform_test)
 
-	dataloader = DataLoader(train_ds.data, train_ds.targets, batch_size=128, shuffle=True, jpeg=jpeg)
-	validloader = DataLoader(test_ds.data, test_ds.targets, batch_size=10000, shuffle=True, jpeg=jpeg)
+	dataloader = DataLoader(train_ds.data, train_ds.targets, batch_size=128, shuffle=True, jpeg=jpeg, Q=10, subsampling="4:2:2")
+	validloader = DataLoader(test_ds.data, test_ds.targets, batch_size=10000, shuffle=True, jpeg=jpeg, Q=10, subsampling="4:2:2")
 
 	device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 	model = resnet18(weights=None)
@@ -62,7 +64,6 @@ def main():
 
 		if epoch % 5 == 0:
 			print("Epoch " + str(epoch) + " training loss: " + str(running_loss/steps))
-
 		losses.append(running_loss/steps)
 
 		model.eval()
@@ -126,7 +127,7 @@ def main():
 	print(f"Time Spent Training: {training_time_taken:.0f} μs")
 	print(f"Time Per Epoch: {training_time_taken/epochs:.0f} μs")
 
-	file_name = "results/cifar" + ("_jpeg" if jpeg else "")
+	file_name = "results/cifar" + (f"_jpeg_{dataloader.Q}_{dataloader.subsampling}" if jpeg else "")
 	with open(file_name + ".txt", 'w') as f:
 		f.write(f"Best Epoch: {best_epoch}\n")
 		f.write(f"Training Loss: {train_loss:.4f}\n")
@@ -144,7 +145,6 @@ def main():
 	plt.ylabel('Cross Entropy')
 	plt.title(f'ResNet18 on CIFAR-10 w/ JPEG={jpeg}')
 	plt.savefig(file_name + ".pdf")
-
 
 if __name__ == "__main__":
 	main()
