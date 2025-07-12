@@ -1,26 +1,30 @@
 import numpy as np
 import torch
+import torchvision.transforms.functional as TF
 from scipy.fftpack import dct, idct
 from scipy.ndimage import zoom
 from PIL import Image
 import random
 
 class DataLoader:
-    def __init__(self, data, labels, batch_size, shuffle=False, jpeg=False, dynamicQ = False, Q=90, subsampling="none", train_ratio=1):
+    def __init__(self, data, labels, batch_size, shuffle=False, jpeg=False, dynamicQ=False, Q=[100], subsampling="none", transform=None):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.pin_memory=True
         self.jpeg = jpeg
-        self.Q = Q
+        self.Q = Q if jpeg else [100]
+        # transformations are really slow, try FFCV
+        self.transform = transform
         self.dynamicQ = dynamicQ
         self.subsampling = subsampling
-        self.train_ratio = train_ratio
         self.labels = torch.LongTensor(labels).to(self.device)
         self.zero_count = [0,0,0]
         self.exit_count = 0
-        self.data = self.process_image(data)
-        self.indices = torch.arange(len(self.data))
+        self.data = []
+        for qf in self.Q:
+            self.data.append(self.process_image(data, qf))
+        self.indices = torch.arange(len(data))
         if self.shuffle:
             self.indices = self.indices[torch.randperm(len(self.indices))]
 
@@ -38,17 +42,30 @@ class DataLoader:
             raise StopIteration
 
         start = self.current_index
-        # train ratio will over shoot the batch size so we can reduce to correct batch size
-        end = start + int(self.batch_size / self.train_ratio)
+        end = start + self.batch_size
         batch_indices = self.indices[start:end]
         self.current_index = end
 
-        return_data = self.data[batch_indices]
-        return_labels = self.labels[batch_indices]
-        # extract original batch size, effectively skipping some data for correct train ratio
-        return return_data[:self.batch_size], return_labels[:self.batch_size]
+        tuple_data =  list(zip(*[d[batch_indices] for d in self.data]))
+        transformed_data= []
+        for t in tuple_data:
+            transformed_t = []
+            for img in t:
+                # pil = TF.to_pil_image(img)
 
-    def process_image(self, data):
+                # if self.transform is not None:
+                #     image_tensor = self.transform(pil)
+                # else:
+                #     image_tensor = TF.pil_to_tensor(pil).to(torch.float32)
+
+                # transformed_t.append(image_tensor) 
+                transformed_t.append(img) 
+            transformed_data.append(torch.stack(transformed_t, dim=0))
+
+        return_data = torch.stack(transformed_data, dim=0).to(self.device)
+        return return_data, self.labels[batch_indices]
+
+    def process_image(self, data, qf):
         self.luminance_table = np.array([
             [16, 11, 10, 16, 24, 40, 51, 61],
             [12, 12, 14, 19, 26, 58, 60, 55],
@@ -73,7 +90,7 @@ class DataLoader:
         ], dtype='float32')
 
         #scaling as defined by libjpeg
-        scale_factor = 5000/self.Q if self.Q < 50 else 200 - self.Q*2
+        scale_factor = 5000/qf if qf < 50 else 200 - qf*2
         self.scaled_lum_table = (self.luminance_table * scale_factor + 50) / 100
         self.scaled_chrom_table = (self.chrominance_table * scale_factor + 50) / 100
         self.scaled_lum_table = np.clip(self.scaled_lum_table, 1, 255).astype(np.uint8)
@@ -83,24 +100,12 @@ class DataLoader:
         for idx, image in enumerate(data):
 
             image = np.rot90(image.reshape((32,32,3),order='F'), k=-1)
-            if self.jpeg:
+            if self.jpeg and qf != 100:
                 image = self.rgb_to_ycbcr(image)
-                # cifar10_classes = [
-                #     "airplane", "automobile", "bird", "cat", "deer",
-                #     "dog", "frog", "horse", "ship", "truck"
-                # ]
-                # print(cifar10_classes[self.labels[idx].item()])
                 image = self.jpeg_compression(image)
             image = np.transpose(image, (2, 0, 1))
             tensor = torch.tensor(image.copy(), dtype=torch.float32)
             compressed_data.append(tensor)
-        # chrom = 16
-        # if self.subsample_chroma == "4:2:2":
-        #     chrom = 8
-        # elif self.subsample_chroma == "4:2:0":
-        #     chrom = 4
-        # print(f"{self.Q}: avg_y_0={self.zero_count[0]/(50000*16)}, avg_cb_0={self.zero_count[1]/(50000*chrom)}, avg_cr_0={self.zero_count[2]/(50000*chrom)}")
-        # exit()
         return torch.stack(compressed_data).to(self.device)
 
     def rgb_to_ycbcr(self, image):
@@ -200,9 +205,4 @@ class DataLoader:
         y, cb, cr = compressed_channels
         ycbcr = self.upsample_chroma(y, cb, cr)
         rgb = self.ycbcr_to_rgb(ycbcr)
-        # image = Image.fromarray(rgb, 'RGB')
-        # image.save('output.bmp')
-        # self.exit_count += 1
-        # if self.exit_count == 4:
-        #     exit()
         return rgb
